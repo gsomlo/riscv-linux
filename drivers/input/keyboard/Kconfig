@@ -757,3 +757,11 @@ config KEYBOARD_MTK_PMIC
 	  module will be called pmic-keys.
 
 endif
+
+config KEYBOARD_LOWRISC
+	tristate "LowRISC keyboard"
+	select INPUT_POLLDEV
+	default n
+	help
+	  Say Y here if you want to use a LowRISC keyboard.
+	  If unsure, say N.
