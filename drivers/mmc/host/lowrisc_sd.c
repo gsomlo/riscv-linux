@@ -36,6 +36,134 @@
 static volatile uint64_t *led_sd_base;
 static uint32_t led_last;
 
+#ifdef CONFIG_LOWRISC_GPIO
+#include <asm/uaccess.h>
+#include <linux/cdev.h>
+#define GPIO_MAJOR  200
+#define GPIO_MINOR  0
+#define GPIO_DEV_COUNT 2
+
+static int     gpio_open( struct inode *, struct file * );
+static ssize_t gpio_read( struct file * ,        char *  , size_t, loff_t *);
+static ssize_t gpio_write(struct file * , const  char *  , size_t, loff_t *);
+static int     gpio_close(struct inode *, struct file * );
+struct file_operations gpio_fops = {
+        read    :       gpio_read,
+        write   :       gpio_write,
+        open    :       gpio_open,
+        release :       gpio_close,
+        owner   :       THIS_MODULE
+};
+
+struct cdev gpio_cdev;
+
+int gpio_init_module(void)
+{
+
+	dev_t devno;
+	unsigned int count = GPIO_DEV_COUNT; // apply for two minor for two LED
+	int err;
+
+	devno = MKDEV(GPIO_MAJOR, GPIO_MINOR);
+	register_chrdev_region(devno, count , "myLED");
+
+	// -- initial the char device
+	cdev_init(&gpio_cdev, &gpio_fops);
+	gpio_cdev.owner = THIS_MODULE;
+	err = cdev_add(&gpio_cdev, devno, count);
+
+	if (err < 0)
+	{
+		printk("Device Add Error\n");
+		return -1;
+	}
+
+	printk("This is lowrisc-gpio driver.\n");
+
+        return 0;
+}
+
+void gpio_cleanup_module(void)
+{
+	dev_t devno;
+
+	devno = MKDEV(GPIO_MAJOR, GPIO_MINOR);
+
+	unregister_chrdev_region(devno, GPIO_DEV_COUNT);
+	cdev_del(&gpio_cdev);
+}
+
+/*
+ * file operation: OPEN
+ * */
+static int gpio_open(struct inode *inod, struct file *fil)
+{
+    return 0;
+}
+
+/*
+ * file operation: READ
+ * */
+static ssize_t gpio_read(struct file *filp, char *buff, size_t len, loff_t *off)
+{
+  static const char hex[] = "0123456789ABCDEF";
+
+	int led_value = 0;
+	short count;
+        char msg[5];
+
+        if (*off)
+          return 0;
+
+        if (led_sd_base)
+          led_value = led_sd_base[from_dip];
+
+        msg[0] = hex[(led_value >> 12)&0xF];
+        msg[1] = hex[(led_value >> 8)&0xF];
+        msg[2] = hex[(led_value >> 4)&0xF];
+        msg[3] = hex[(led_value >> 0)&0xF];
+
+        if (len > 4)
+          len = 4;
+
+	count = raw_copy_to_user(buff, msg, len);
+
+	return len;
+}
+
+/*
+ * file operation: WRITE
+ * */
+static ssize_t gpio_write(struct file *filp, const char *buff, size_t len, loff_t *off)
+{
+	short count;
+        char *endp, msg[7];
+
+        if (*off)
+          return 0;
+
+        if (len > 6)
+          len = 6;
+	count = raw_copy_from_user( msg, buff, len );
+        msg[len] = 0;
+
+        if (led_sd_base)
+          {
+            led_last = (led_last&red_led) | (simple_strtol(msg, &endp, 16) & ~red_led);
+            printk("User msg %s, led=%X", msg, led_last);
+            led_sd_base[led_reg] = led_last;
+          }
+	return len;
+}
+
+/*
+ * file operation : CLOSE
+ * */
+static int gpio_close(struct inode *inod, struct file *fil)
+{
+	return 0;
+}
+#endif
 
 static void lowrisc_sd_set_led(struct lowrisc_sd_host *host, unsigned char state)
 {
@@ -591,6 +719,9 @@ static int lowrisc_sd_probe(struct platform_device *pdev)
 	}
 
         led_sd_base = host->ioaddr;
+#ifdef CONFIG_LOWRISC_GPIO
+        gpio_init_module();
+#endif
 	host->ioaddr = ioremap(iomem->start, resource_size(iomem));
 	if (!host->ioaddr) {
 		ret = -ENOMEM;
